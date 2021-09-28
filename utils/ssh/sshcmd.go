@@ -1,3 +1,17 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package ssh
 
 import (
@@ -9,10 +23,11 @@ import (
 )
 
 func (s *SSH) Ping(host string) error {
-	_, err := s.Connect(host)
+	client, _, err := s.Connect(host)
 	if err != nil {
 		return fmt.Errorf("[ssh %s]create ssh session failed, %v", host, err)
 	}
+	client.Close()
 	return nil
 }
 
@@ -24,13 +39,13 @@ func (s *SSH) CmdAsync(host string, cmds ...string) error {
 			continue
 		}
 		func(cmd string) {
-			session, err := s.Connect(host)
+			client, session, err := s.Connect(host)
 			if err != nil {
 				flag = true
 				logger.Error("[ssh %s]create ssh session failed, %s", host, err)
 				return
 			}
-			defer session.Close()
+			defer client.Close()
 			logger.Info("[ssh][%s] : %s", host, cmd)
 			stdout, err := session.StdoutPipe()
 			if err != nil {
@@ -52,11 +67,11 @@ func (s *SSH) CmdAsync(host string, cmds ...string) error {
 			doneout := make(chan bool, 1)
 			doneerr := make(chan bool, 1)
 			go func() {
-				readPipe(stderr, true)
+				readPipe(stderr)
 				doneerr <- true
 			}()
 			go func() {
-				readPipe(stdout, false)
+				readPipe(stdout)
 				doneout <- true
 			}()
 			<-doneerr
@@ -78,20 +93,19 @@ func (s *SSH) CmdAsync(host string, cmds ...string) error {
 
 func (s *SSH) Cmd(host, cmd string) ([]byte, error) {
 	//logger.Info("[ssh][%s] %s", host, cmd)
-	session, err := s.Connect(host)
+	client, session, err := s.Connect(host)
 	if err != nil {
 		return nil, fmt.Errorf("[ssh][%s] create ssh session failed, %s", host, err)
 	}
-	defer session.Close()
+	defer client.Close()
 	b, err := session.CombinedOutput(cmd)
 	if err != nil {
-		fmt.Printf("[ssh][%s]failed to run command [%s],output is: %s", host, cmd, b)
-		return nil, fmt.Errorf("[ssh][%s]run command failed [%s]", host, cmd)
+		return b, fmt.Errorf("[ssh][%s]run command failed [%s]", host, cmd)
 	}
 	return b, nil
 }
 
-func readPipe(pipe io.Reader, isErr bool) {
+func readPipe(pipe io.Reader) {
 	r := bufio.NewReader(pipe)
 	for {
 		line, _, err := r.ReadLine()

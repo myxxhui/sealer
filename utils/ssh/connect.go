@@ -1,3 +1,17 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package ssh
 
 import (
@@ -9,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/alibaba/sealer/utils"
 
 	"golang.org/x/crypto/ssh"
 
@@ -23,7 +39,7 @@ func (s *SSH) connect(host string) (*ssh.Client, error) {
 	config := ssh.Config{
 		Ciphers: []string{"aes128-ctr", "aes192-ctr", "aes256-ctr", "aes128-gcm@openssh.com", "arcfour256", "arcfour128", "aes128-cbc", "3des-cbc", "aes192-cbc", "aes256-cbc"},
 	}
-	DefaultTimeout := time.Duration(1) * time.Minute
+	DefaultTimeout := time.Duration(15) * time.Second
 	if s.Timeout == nil {
 		s.Timeout = &DefaultTimeout
 	}
@@ -36,19 +52,21 @@ func (s *SSH) connect(host string) (*ssh.Client, error) {
 			return nil
 		},
 	}
-	addr := s.addrReformat(host)
+	ip, port := utils.GetSSHHostIPAndPort(host)
+	addr := s.addrReformat(ip, port)
 	return ssh.Dial("tcp", addr, clientConfig)
 }
 
-func (s *SSH) Connect(host string) (*ssh.Session, error) {
+func (s *SSH) Connect(host string) (*ssh.Client, *ssh.Session, error) {
 	client, err := s.connect(host)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, err
+		client.Close()
+		return nil, nil, err
 	}
 
 	modes := ssh.TerminalModes{
@@ -58,10 +76,11 @@ func (s *SSH) Connect(host string) (*ssh.Session, error) {
 	}
 
 	if err := session.RequestPty("xterm", 80, 40, modes); err != nil {
-		return nil, err
+		client.Close()
+		return nil, nil, err
 	}
 
-	return session, nil
+	return client, session, nil
 }
 
 func (s *SSH) sshAuthMethod(password, pkFile, pkPasswd string) (auth []ssh.AuthMethod) {
@@ -79,7 +98,11 @@ func (s *SSH) sshAuthMethod(password, pkFile, pkPasswd string) (auth []ssh.AuthM
 
 //Authentication with a private key,private key has password and no password to verify in this
 func (s *SSH) sshPrivateKeyMethod(pkFile, pkPassword string) (am ssh.AuthMethod, err error) {
-	pkData := s.readFile(pkFile)
+	pkData, err := ioutil.ReadFile(pkFile)
+	if err != nil {
+		return nil, err
+	}
+
 	var pk ssh.Signer
 	if pkPassword == "" {
 		pk, err = ssh.ParsePrivateKey(pkData)
@@ -104,18 +127,9 @@ func (s *SSH) sshPasswordMethod(password string) ssh.AuthMethod {
 	return ssh.Password(password)
 }
 
-func (s *SSH) readFile(name string) []byte {
-	content, err := ioutil.ReadFile(name)
-	if err != nil {
-		logger.Error("read [%s] file failed, %s", name, err)
-		os.Exit(1)
-	}
-	return content
-}
-
-func (s *SSH) addrReformat(host string) string {
+func (s *SSH) addrReformat(host, port string) string {
 	if !strings.Contains(host, ":") {
-		host = fmt.Sprintf("%s:22", host)
+		host = fmt.Sprintf("%s:%s", host, port)
 	}
 	return host
 }

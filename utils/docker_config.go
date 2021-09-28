@@ -1,3 +1,17 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package utils
 
 import (
@@ -25,7 +39,10 @@ type DockerInfo struct {
 func DockerConfig() (*DockerInfo, error) {
 	authFile := common.DefaultRegistryAuthConfigDir()
 	if !IsFileExist(authFile) {
-		return &DockerInfo{Auths: map[string]AuthItem{}}, ioutil.WriteFile(authFile, []byte("{\"auths\":{}}"), common.FileMode0644)
+		if err := os.MkdirAll(filepath.Dir(authFile), common.FileMode0755); err != nil {
+			return nil, err
+		}
+		return &DockerInfo{Auths: map[string]AuthItem{}}, AtomicWriteFile(authFile, []byte("{\"auths\":{}}"), common.FileMode0644)
 	}
 
 	filebyts, err := ioutil.ReadFile(authFile)
@@ -86,7 +103,7 @@ func SetDockerConfig(hostname, username, password string) error {
 	if err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(authFile, data, common.FileMode0644); err != nil {
+	if err := AtomicWriteFile(authFile, data, common.FileMode0644); err != nil {
 		return fmt.Errorf("write %s failed,%s", authFile, err)
 	}
 	return nil

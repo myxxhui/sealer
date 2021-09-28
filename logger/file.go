@@ -1,3 +1,17 @@
+// Copyright © 2021 github.com/wonderivan/logger
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package logger
 
 import (
@@ -12,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/alibaba/sealer/common"
 )
 
 type fileLogger struct {
@@ -96,7 +112,7 @@ func (f *fileLogger) LogWrite(when time.Time, msgText interface{}, level logLeve
 			f.Lock()
 			if f.needCreateFresh(len(msg), day) {
 				if err := f.createFreshFile(when); err != nil {
-					fmt.Fprintf(os.Stderr, "createFreshFile(%q): %s\n", f.Filename, err)
+					fmt.Fprintf(common.StdErr, "createFreshFile(%q): %s\n", f.Filename, err)
 				}
 			}
 			f.Unlock()
@@ -238,7 +254,7 @@ func (f *fileLogger) createFreshFile(logTime time.Time) error {
 	// 将旧文件重命名，然后创建新文件
 	err = os.Rename(f.Filename, fName)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "os.Rename %s to %s err:%s\n", f.Filename, fName, err.Error())
+		_, _ = fmt.Fprintf(common.StdErr, "os.Rename %s to %s err:%s\n", f.Filename, fName, err.Error())
 		return RestartLogger(f)
 	}
 
@@ -254,7 +270,7 @@ func (f *fileLogger) deleteOldLog() {
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) (returnErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Fprintf(os.Stderr, "Unable to delete old log '%s', error: %v\n", path, r)
+				fmt.Fprintf(common.StdErr, "Unable to delete old log '%s', error: %v\n", path, r)
 			}
 		}()
 
@@ -271,7 +287,7 @@ func (f *fileLogger) deleteOldLog() {
 		return
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to delete old log error: %v\n", err)
+		fmt.Fprintf(common.StdErr, "failed to delete old log error: %v\n", err)
 	}
 }
 

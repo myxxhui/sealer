@@ -1,18 +1,16 @@
-/*
-Copyright 2021 fanux.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package v1
 
@@ -28,11 +26,8 @@ type SSH struct {
 }
 
 type Network struct {
-	Interface  string `json:"interface,omitempty"`
-	CNIName    string `json:"cniName,omitempty"`
-	PodCIDR    string `json:"podCIDR,omitempty"`
-	SvcCIDR    string `json:"svcCIDR,omitempty"`
-	WithoutCNI bool   `json:"withoutCNI,omitempty"`
+	PodCIDR string `json:"podCIDR,omitempty"`
+	SvcCIDR string `json:"svcCIDR,omitempty"`
 }
 
 type Hosts struct {
@@ -68,6 +63,7 @@ type ClusterStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	// TODO save cluster status info
+
 }
 
 // +kubebuilder:object:root=true
@@ -108,6 +104,13 @@ type Cluster struct {
 
 func (in *Cluster) GetAnnotationsByKey(key string) string {
 	return in.Annotations[key]
+}
+
+func (in *Cluster) SetAnnotations(key, value string) {
+	if in.Annotations == nil {
+		in.Annotations = make(map[string]string)
+	}
+	in.Annotations[key] = value
 }
 
 // +kubebuilder:object:root=true

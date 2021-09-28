@@ -1,13 +1,28 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package runtime
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"path/filepath"
 
-	"github.com/alibaba/sealer/common"
-	"github.com/alibaba/sealer/utils"
+	"github.com/alibaba/sealer/image/store"
 
+	"github.com/alibaba/sealer/common"
 	"github.com/alibaba/sealer/logger"
 	v1 "github.com/alibaba/sealer/types/api/v1"
 	"github.com/alibaba/sealer/utils/ssh"
@@ -15,12 +30,10 @@ import (
 
 type Interface interface {
 	// exec kubeadm init
-	LoadMetadata()
 	Init(cluster *v1.Cluster) error
 	Hook(cluster *v1.Cluster) error
 	Upgrade(cluster *v1.Cluster) error
 	Reset(cluster *v1.Cluster) error
-	CNI(cluster *v1.Cluster) error
 	JoinMasters(newMastersIPList []string) error
 	JoinNodes(newNodesIPList []string) error
 	DeleteMasters(mastersIPList []string) error
@@ -58,50 +71,41 @@ type Default struct {
 	LvscareImage      string
 	SSH               ssh.Interface
 	Rootfs            string
-
-	// net config
-	Interface  string
-	Network    string
-	CIDR       string
-	IPIP       bool
-	MTU        string
-	WithoutCNI bool
+	BasePath          string
+	imageStore        store.ImageStore
+	CriSocket         string
+	CriCGroupDriver   string
+	KubeadmAPI        string
 }
 
-func NewDefaultRuntime(cluster *v1.Cluster) Interface {
-	d := &Default{}
-	err := d.initRunner(cluster)
+func NewDefaultRuntime(cluster *v1.Cluster) (Interface, error) {
+	c, err := store.NewDefaultImageStore()
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return d
+	d := &Default{imageStore: c}
+	return d.initRunner(cluster)
 }
 
-func (d *Default) LoadMetadata() {
-	metadataPath := filepath.Join("/tmp", d.ClusterName, common.DefaultMetadataName)
+func (d *Default) LoadMetadata() error {
+	metadataPath := filepath.Join(common.DefaultMountCloudImageDir(d.ClusterName), common.DefaultMetadataName)
 	var metadataFile []byte
 	var err error
 	metadata := &Metadata{}
-	if utils.IsFileExist(metadataPath) {
-		metadataFile, err = ioutil.ReadFile(metadataPath)
-		if err != nil {
-			logger.Warn("read metadata is error: %v", err)
-		}
-		err = json.Unmarshal(metadataFile, metadata)
-		if err != nil {
-			logger.Warn("load metadata failed, skip")
-			return
-		}
-		logger.Debug("metadata version %s", metadata.Version)
+	metadataFile, err = ioutil.ReadFile(metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to read CloudImage metadata %v", err)
 	}
+	err = json.Unmarshal(metadataFile, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to load CloudImage metadata %v", err)
+	}
+	logger.Info("metadata version %s", metadata.Version)
 	d.Metadata = metadata
+	return nil
 }
 func (d *Default) Reset(cluster *v1.Cluster) error {
 	return d.reset(cluster)
-}
-
-func (d *Default) CNI(cluster *v1.Cluster) error {
-	return d.cni(cluster)
 }
 
 func (d *Default) Upgrade(cluster *v1.Cluster) error {

@@ -1,3 +1,17 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package aliyun
 
 import (
@@ -8,8 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	utils2 "github.com/alibaba/sealer/infra/utils"
 
 	"github.com/alibaba/sealer/logger"
 	v1 "github.com/alibaba/sealer/types/api/v1"
@@ -32,7 +44,7 @@ type EcsManager struct {
 }
 
 func (a *AliProvider) RetryEcsRequest(request requests.AcsRequest, response responses.AcsResponse) error {
-	return utils2.Retry(TryTimes, TrySleepTime, func() error {
+	return utils.Retry(TryTimes, TrySleepTime, func() error {
 		err := a.EcsClient.DoAction(request, response)
 		if err != nil {
 			return err
@@ -42,29 +54,36 @@ func (a *AliProvider) RetryEcsRequest(request requests.AcsRequest, response resp
 }
 
 func (a *AliProvider) TryGetInstance(request *ecs.DescribeInstancesRequest, response *ecs.DescribeInstancesResponse, expectCount int) error {
-	return utils2.Retry(TryTimes, TrySleepTime, func() error {
+	return utils.Retry(TryTimes, TrySleepTime, func() error {
 		err := a.EcsClient.DoAction(request, response)
+		var ipList []string
 		if err != nil {
 			return err
 		}
 		instances := response.Instances.Instance
-		if expectCount != -1 {
-			if len(instances) != expectCount {
-				return errors.New("the number of instances is not as expected")
+		if expectCount == -1 {
+			return nil
+		}
+
+		if len(instances) != expectCount {
+			return errors.New("the number of instances is not as expected")
+		}
+		for _, instance := range instances {
+			if instance.NetworkInterfaces.NetworkInterface[0].PrimaryIpAddress == "" {
+				return errors.New("PrimaryIpAddress cannt nob be nil")
 			}
-			for _, instance := range instances {
-				if instance.NetworkInterfaces.NetworkInterface[0].PrimaryIpAddress == "" {
-					return errors.New("PrimaryIpAddress cannt nob be nil")
-				}
+			if len(ipList) != 0 && !utils.NotIn(instance.NetworkInterfaces.NetworkInterface[0].PrimaryIpAddress, ipList) {
+				return errors.New("PrimaryIpAddress cannt nob be same")
 			}
+
+			ipList = append(ipList, instance.NetworkInterfaces.NetworkInterface[0].PrimaryIpAddress)
 		}
 
 		return nil
 	})
 }
 
-func (a *AliProvider) InputIPlist(instanceRole string) (iplist []string, err error) {
-	var ipList []string
+func (a *AliProvider) InputIPlist(instanceRole string) (ipList []string, err error) {
 	var hosts *v1.Hosts
 	switch instanceRole {
 	case Master:
@@ -213,7 +232,7 @@ func (a *AliProvider) GetInstancesInfo(instancesRole, expectCount string) (insta
 	return
 }
 
-func (a *AliProvider) ReconcileIntances(instanceRole string) error {
+func (a *AliProvider) ReconcileInstances(instanceRole string) error {
 	var hosts *v1.Hosts
 	var instances []Instance
 	var instancesIDs string
@@ -236,7 +255,7 @@ func (a *AliProvider) ReconcileIntances(instanceRole string) error {
 	}
 	i, err := strconv.Atoi(hosts.Count)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get hosts count, %v", err)
 	}
 	if instancesIDs != "" {
 		instances, err = a.GetInstancesInfo(instanceRole, JustGetInstanceInfo)
@@ -283,13 +302,15 @@ func (a *AliProvider) ReconcileIntances(instanceRole string) error {
 		}
 		hosts.IPList = utils.ReduceIPList(hosts.IPList, ipList)
 	}
+
 	cpu, err := strconv.Atoi(hosts.CPU)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get hosts CPU, %v", err)
 	}
+
 	memory, err := strconv.Atoi(hosts.Memory)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get hosts memory, %v", err)
 	}
 	for _, instance := range instances {
 		if instance.CPU != cpu || instance.Memory != memory {

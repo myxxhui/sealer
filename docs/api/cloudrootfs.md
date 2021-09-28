@@ -14,9 +14,6 @@ cloud rootfs will package all the dependencies refers to the kubernetes cluster 
 │   ├── kubelet
 │   ├── nerdctl
 │   └── seautil
-├── cni
-│   └── calico
-│       └── calico.yaml.tmpl
 ├── cri
 │   ├── containerd
 │   ├── containerd-shim
@@ -82,7 +79,8 @@ sealer build -t kuberntes:v1.18.3 .
 FROM kubernetes:1.18.3
 COPY preHook.sh /scripts/
 ```
-preHook.sh will execute after init.sh before kubeadm init master0 
+
+preHook.sh will execute after init.sh before kubeadm init master0
 
 ## Registry
 

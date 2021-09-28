@@ -1,8 +1,25 @@
+// Copyright © 2021 Alibaba Group Holding Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package runtime
 
 import (
 	"fmt"
+	"path"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	"github.com/alibaba/sealer/common"
 	"github.com/alibaba/sealer/logger"
@@ -40,7 +57,7 @@ func VersionCompare(v1, v2 string) bool {
 }
 
 func PreInitMaster0(sshClient ssh.Interface, remoteHostIP string) error {
-	err := ssh.WaitSSHReady(sshClient, remoteHostIP)
+	err := ssh.WaitSSHReady(sshClient, 6, remoteHostIP)
 	if err != nil {
 		return fmt.Errorf("apply cloud cluster failed: %s", err)
 	}
@@ -48,11 +65,11 @@ func PreInitMaster0(sshClient ssh.Interface, remoteHostIP string) error {
 	sealerPath := utils.ExecutableFilePath()
 	err = sshClient.Copy(remoteHostIP, sealerPath, common.RemoteSealerPath)
 	if err != nil {
-		return fmt.Errorf("send seautil to remote host %s failed:%v", remoteHostIP, err)
+		return fmt.Errorf("send sealer to remote host %s failed:%v", remoteHostIP, err)
 	}
 	err = sshClient.CmdAsync(remoteHostIP, fmt.Sprintf(common.ChmodCmd, common.RemoteSealerPath))
 	if err != nil {
-		return fmt.Errorf("chmod +x seautil on remote host %s failed:%v", remoteHostIP, err)
+		return fmt.Errorf("chmod +x sealer on remote host %s failed:%v", remoteHostIP, err)
 	}
 	logger.Info("send sealer cmd to %s success !", remoteHostIP)
 
@@ -66,7 +83,7 @@ func PreInitMaster0(sshClient ssh.Interface, remoteHostIP string) error {
 	// send register login info
 	authFile := common.DefaultRegistryAuthConfigDir()
 	if utils.IsFileExist(authFile) {
-		err = sshClient.Copy(remoteHostIP, authFile, authFile)
+		err = sshClient.Copy(remoteHostIP, authFile, common.DefaultRegistryAuthDir)
 		if err != nil {
 			return fmt.Errorf("failed to send register config %s to remote host %s err: %v", authFile, remoteHostIP, err)
 		}
@@ -74,5 +91,27 @@ func PreInitMaster0(sshClient ssh.Interface, remoteHostIP string) error {
 	} else {
 		logger.Warn("failed to find %s, if image registry is private, please login first", authFile)
 	}
+	return nil
+}
+
+func GetKubectlAndKubeconfig(ssh ssh.Interface, host string) error {
+	// fetch the cluster kubeconfig, and add /etc/hosts "EIP apiserver.cluster.local" so we can get the current cluster status later
+	err := ssh.Fetch(host, path.Join(common.DefaultKubeConfigDir(), "config"), common.KubeAdminConf)
+	if err != nil {
+		return errors.Wrap(err, "failed to copy kubeconfig")
+	}
+	err = utils.AppendFile(common.EtcHosts, fmt.Sprintf("%s %s", host, common.APIServerDomain))
+	if err != nil {
+		return errors.Wrap(err, "failed to append master IP to etc hosts")
+	}
+	err = ssh.Fetch(host, common.KubectlPath, common.KubectlPath)
+	if err != nil {
+		return errors.Wrap(err, "fetch kubectl failed")
+	}
+	err = utils.Cmd("chmod", "+x", common.KubectlPath)
+	if err != nil {
+		return errors.Wrap(err, "chmod a+x kubectl failed")
+	}
+
 	return nil
 }
