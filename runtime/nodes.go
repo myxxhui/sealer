@@ -1,17 +1,3 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package runtime
 
 import (
@@ -43,10 +29,7 @@ func (d *Default) joinNodes(nodes []string) error {
 	if len(nodes) == 0 {
 		return nil
 	}
-	if err := d.LoadMetadata(); err != nil {
-		return fmt.Errorf("failed to load metadata %v", err)
-	}
-	if err := ssh.WaitSSHReady(d.SSH, 6, nodes...); err != nil {
+	if err := ssh.WaitSSHReady(d.SSH, nodes...); err != nil {
 		return errors.Wrap(err, "join nodes wait for ssh ready time out")
 	}
 	if err := d.GetJoinTokenHashAndKey(); err != nil {
@@ -58,8 +41,8 @@ func (d *Default) joinNodes(nodes []string) error {
 		masters += fmt.Sprintf(" --rs %s:6443", utils.GetHostIP(master))
 	}
 	ipvsCmd := fmt.Sprintf(RemoteAddIPVS, d.VIP, masters)
-
-	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(d.Rootfs, d.Masters[0]))
+	templateData := string(d.JoinTemplate(""))
+	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(utils.GetHostIP(d.Masters[0])))
 	for _, node := range nodes {
 		wg.Add(1)
 		go func(node string) {
@@ -72,9 +55,7 @@ func (d *Default) joinNodes(nodes []string) error {
 					d.CmdToString(node, addRouteCmd, "")
 				}
 			*/
-			// send join node config, get cgroup driver on every join nodes
-			d.CriCGroupDriver = d.getCgroupDriverFromShell(node)
-			templateData := string(d.JoinTemplate(""))
+			// send join node config
 			cmdJoinConfig := fmt.Sprintf(RemoteJoinConfig, templateData, d.Rootfs)
 			cmdHosts := fmt.Sprintf(RemoteAddIPVSEtcHosts, d.VIP, d.APIServer)
 			cmd := d.Command(d.Metadata.Version, JoinNode)
@@ -110,7 +91,8 @@ func (d *Default) deleteNodes(nodes []string) error {
 }
 
 func (d *Default) deleteNode(node string) error {
-	if err := d.SSH.CmdAsync(node, fmt.Sprintf(RemoteCleanMasterOrNode, vlogToStr(d.Vlog)), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, d.APIServer), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, getRegistryHost(d.Rootfs, d.Masters[0]))); err != nil {
+	host := utils.GetHostIP(node)
+	if err := d.SSH.CmdAsync(host, fmt.Sprintf(RemoteCleanMasterOrNode, vlogToStr(d.Vlog)), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, d.APIServer), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, getRegistryHost(d.Masters[0]))); err != nil {
 		return err
 	}
 

@@ -1,17 +1,3 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package image
 
 import (
@@ -20,48 +6,45 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/alibaba/sealer/image/types"
-
-	"github.com/alibaba/sealer/image/store"
-
-	"github.com/docker/distribution/manifest/schema2"
-
-	"github.com/alibaba/sealer/image/distributionutil"
-	"github.com/docker/distribution"
+	"github.com/alibaba/sealer/registry"
 
 	"github.com/alibaba/sealer/image/reference"
+	imageutils "github.com/alibaba/sealer/image/utils"
 	v1 "github.com/alibaba/sealer/types/api/v1"
 )
 
 //DefaultImageMetadataService provide service for image metadata operations
 type DefaultImageMetadataService struct {
-	imageStore store.ImageStore
 }
 
 // Tag is used to give an another name for imageName
 func (d DefaultImageMetadataService) Tag(imageName, tarImageName string) error {
-	imageMetadata, err := d.imageStore.GetImageMetadataItem(imageName)
+	imageMetadataMap, err := imageutils.GetImageMetadataMap()
 	if err != nil {
 		return err
+	}
+	imageMetadata, ok := imageMetadataMap[imageName]
+	if !ok {
+		return fmt.Errorf("failed to found image %s", imageName)
 	}
 	named, err := reference.ParseToNamed(tarImageName)
 	if err != nil {
 		return err
 	}
 	imageMetadata.Name = named.Raw()
-	if err := d.imageStore.SetImageMetadataItem(imageMetadata); err != nil {
+	if err := imageutils.SetImageMetadata(imageMetadata); err != nil {
 		return fmt.Errorf("failed to add tag %s, %s", tarImageName, err)
 	}
 	return nil
 }
 
 //List will list all kube-image locally
-func (d DefaultImageMetadataService) List() ([]types.ImageMetadata, error) {
-	imageMetadataMap, err := d.imageStore.GetImageMetadataMap()
+func (d DefaultImageMetadataService) List() ([]imageutils.ImageMetadata, error) {
+	imageMetadataMap, err := imageutils.GetImageMetadataMap()
 	if err != nil {
 		return nil, err
 	}
-	var imageMetadataList []types.ImageMetadata
+	var imageMetadataList []imageutils.ImageMetadata
 	for _, imageMetadata := range imageMetadataMap {
 		imageMetadataList = append(imageMetadataList, imageMetadata)
 	}
@@ -73,7 +56,7 @@ func (d DefaultImageMetadataService) List() ([]types.ImageMetadata, error) {
 
 // GetImage will return the v1.Image locally
 func (d DefaultImageMetadataService) GetImage(imageName string) (*v1.Image, error) {
-	return d.imageStore.GetByName(imageName)
+	return imageutils.GetImage(imageName)
 }
 
 // GetRemoteImage will return the v1.Image from remote registry
@@ -82,7 +65,7 @@ func (d DefaultImageMetadataService) GetRemoteImage(imageName string) (v1.Image,
 		image v1.Image
 		err   error
 		named reference.Named
-		ctx   = context.Background()
+		reg   *registry.Registry
 	)
 
 	named, err = reference.ParseToNamed(imageName)
@@ -90,39 +73,25 @@ func (d DefaultImageMetadataService) GetRemoteImage(imageName string) (v1.Image,
 		return image, err
 	}
 
-	repo, err := distributionutil.NewV2Repository(named, "pull")
+	reg, err = initRegistry(named.Domain())
 	if err != nil {
-		return v1.Image{}, err
+		return image, err
 	}
 
-	ms, err := repo.Manifests(ctx)
+	manifest, err := reg.ManifestV2(context.Background(), named.Repo(), named.Tag())
 	if err != nil {
-		return v1.Image{}, err
+		return image, err
 	}
 
-	manifest, err := ms.Get(ctx, "", distribution.WithTagOption{Tag: named.Tag()})
+	configReader, err := reg.DownloadLayer(context.Background(), named.Repo(), manifest.Config.Digest)
 	if err != nil {
-		return v1.Image{}, err
+		return image, err
 	}
 
-	// just transform it to schema2.DeserializedManifest
-	// because we only upload this kind manifest.
-	scheme2Manifest, ok := manifest.(*schema2.DeserializedManifest)
-	if !ok {
-		return v1.Image{}, fmt.Errorf("failed to parse manifest %s to DeserializedManifest", named.RepoTag())
-	}
-
-	bs := repo.Blobs(ctx)
-	configJSONReader, err := bs.Open(ctx, scheme2Manifest.Config.Digest)
-	if err != nil {
-		return v1.Image{}, err
-	}
-	defer configJSONReader.Close()
-
-	decoder := json.NewDecoder(configJSONReader)
+	decoder := json.NewDecoder(configReader)
 	return image, decoder.Decode(&image)
 }
 
 func (d DefaultImageMetadataService) DeleteImage(imageName string) error {
-	return d.imageStore.DeleteByName(imageName)
+	return imageutils.DeleteImage(imageName)
 }

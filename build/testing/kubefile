@@ -1,4 +1,5 @@
-FROM registry.cn-qingdao.aliyuncs.com/sealer-io/kubernetes:v1.19.9.alpha.3
+FROM sealer/my-kuberentes-cluster-with-dashboard:latest
 COPY Clusterfile etc
 COPY dashboard.yaml .
+RUN wget helm.sh/helm
 CMD touch mytest

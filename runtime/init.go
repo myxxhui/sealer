@@ -1,17 +1,3 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package runtime
 
 import (
@@ -27,73 +13,61 @@ import (
 	"github.com/alibaba/sealer/logger"
 
 	"github.com/alibaba/sealer/cert"
+	"github.com/alibaba/sealer/guest"
 	v1 "github.com/alibaba/sealer/types/api/v1"
 	"github.com/alibaba/sealer/utils"
 	"github.com/alibaba/sealer/utils/ssh"
 )
 
 const (
-	RemoteCmdCopyStatic            = "mkdir -p %s && cp -f %s %s"
-	RemoteApplyYaml                = `echo '%s' | kubectl apply -f -`
-	RemoteCmdGetNetworkInterface   = "ls /sys/class/net"
-	RemoteCmdExistNetworkInterface = "ip addr show %s | egrep \"%s\" || true"
-	WriteKubeadmConfigCmd          = "cd %s && echo \"%s\" > kubeadm-config.yaml"
-	DefaultVIP                     = "10.103.97.2"
-	DefaultAPIserverDomain         = "apiserver.cluster.local"
-	DefaultRegistryPort            = 5000
+	RemoteCmdInitEtcdDir   = "mkdir -p /var/lib/etcd && mount %s /var/lib/etcd && rm -rf /var/lib/etcd/* && echo \"%s /var/lib/etcd ext4 defaults 0 0\" >> /etc/fstab"
+	RemoteCmdUnmountEtcd   = "umount /var/lib/etcd; mkfs.ext4 -F %s"
+	RemoteCmdLinkStatic    = "mkdir -p %s && ln -f %s %s"
+	RemoteApplyYaml        = `echo '%s' | kubectl apply -f -`
+	WriteKubeadmConfigCmd  = "cd %s && echo \"%s\" > kubeadm-config.yaml"
+	DefaultVIP             = "10.103.97.2"
+	DefaultAPIserverDomain = "apiserver.cluster.local"
+	DefaultRegistryPort    = 5000
 )
 
 func (d *Default) init(cluster *v1.Cluster) error {
-	if err := d.LoadMetadata(); err != nil {
-		return fmt.Errorf("failed to load metadata %v", err)
-	}
+	/*
+		if err := d.initRunner(cluster); err != nil {
+			return err
+		}
+	*/
 	//config kubeadm
 	if err := d.ConfigKubeadmOnMaster0(); err != nil {
-		return fmt.Errorf("failed to config kubeadmin on master0 %v", err)
+		return err
 	}
 
 	//generate certs
 	if err := d.GenerateCert(); err != nil {
-		return fmt.Errorf("failed to gernerate cert %v", err)
+		return err
 	}
 
 	//create kubeConfig for master0
 	if err := d.CreateKubeConfig(); err != nil {
-		return fmt.Errorf("failed to create kubeConfig for master0 %v", err)
+		return err
 	}
 
-	if err := d.CopyStaticFiles(d.Masters); err != nil {
-		return fmt.Errorf("failed to copy static files %v", err)
+	if err := d.LinkStaticFiles(d.Masters); err != nil {
+		return err
 	}
 
-	if err := d.EnsureRegistry(); err != nil {
-		return fmt.Errorf("failed to encsure registry %v", err)
+	if err := d.EnsureRegistryOnMaster0(); err != nil {
+		return err
 	}
 
 	if err := d.InitMaster0(); err != nil {
-		return fmt.Errorf("failed to init master0 %v", err)
-	}
-
-	if err := d.GetKubectlAndKubeconfig(); err != nil {
-		return fmt.Errorf("failed to get kubectl and kubeConfig %v", err)
+		return err
 	}
 
 	return nil
 }
 
-func (d *Default) GetKubectlAndKubeconfig() error {
-	if utils.IsFileExist(common.DefaultKubeConfigFile()) {
-		return nil
-	}
-	return GetKubectlAndKubeconfig(d.SSH, d.Masters[0])
-}
-
-func (d *Default) initRunner(cluster *v1.Cluster) (Interface, error) {
-	client, err := ssh.NewSSHClientWithCluster(cluster)
-	if err != nil {
-		return nil, err
-	}
-	d.SSH = client.SSH
+func (d *Default) initRunner(cluster *v1.Cluster) error {
+	d.SSH = ssh.NewSSHByCluster(cluster)
 	d.ClusterName = cluster.Name
 	d.SvcCIDR = cluster.Spec.Network.SvcCIDR
 	d.PodCIDR = cluster.Spec.Network.PodCIDR
@@ -104,30 +78,32 @@ func (d *Default) initRunner(cluster *v1.Cluster) (Interface, error) {
 	// TODO add host port
 	d.Nodes = cluster.Spec.Nodes.IPList
 	d.APIServer = DefaultAPIserverDomain
-	d.Rootfs = common.DefaultTheClusterRootfsDir(d.ClusterName)
-	d.BasePath = path.Join(common.DefaultClusterRootfsDir, d.ClusterName)
-	d.CertPath = fmt.Sprintf("%s/pki", d.BasePath)
+	d.Rootfs = path.Join(common.DefaultClusterRootfsDir, d.ClusterName)
+	d.CertPath = fmt.Sprintf("%s/pki", d.Rootfs)
 	d.CertEtcdPath = fmt.Sprintf("%s/etcd", d.CertPath)
 	d.StaticFileDir = fmt.Sprintf("%s/statics", d.Rootfs)
 	// TODO remote port in ipList
 	d.APIServerCertSANs = append(cluster.Spec.CertSANS, d.getDefaultSANs()...)
+	d.Interface = cluster.Spec.Network.Interface
+	d.Network = cluster.Spec.Network.CNIName
 	d.PodCIDR = cluster.Spec.Network.PodCIDR
 	d.SvcCIDR = cluster.Spec.Network.SvcCIDR
-	return d, nil
-	// return d.LoadMetadata()
+	d.WithoutCNI = cluster.Spec.Network.WithoutCNI
+	if d.IPIP && d.MTU == "" {
+		d.MTU = "1480"
+	} else {
+		d.MTU = "1550"
+	}
+
+	return nil
 }
 func (d *Default) ConfigKubeadmOnMaster0() error {
 	var templateData string
 	var err error
 	var tpl []byte
 	var fileData []byte
-	// on master init .we need to get master0 cgroupdriver.
-	d.CriCGroupDriver = d.getCgroupDriverFromShell(d.Masters[0])
 	if d.KubeadmFilePath == "" {
 		tpl, err = d.defaultTemplate()
-		if err != nil {
-			return fmt.Errorf("failed to get default kubeadm template %v", err)
-		}
 	} else {
 		//TODO rootfs kubeadm.tmpl
 		fileData, err = ioutil.ReadFile(d.KubeadmFilePath)
@@ -135,9 +111,6 @@ func (d *Default) ConfigKubeadmOnMaster0() error {
 			return err
 		}
 		tpl, err = d.templateFromContent(string(fileData))
-		if err != nil {
-			return fmt.Errorf("failed to get kubeadm template %v", err)
-		}
 	}
 
 	if err != nil {
@@ -182,13 +155,15 @@ func (d *Default) GenerateCert() error {
 
 func (d *Default) CreateKubeConfig() error {
 	hostname := d.GetRemoteHostName(d.Masters[0])
+
 	certConfig := cert.Config{
 		Path:     d.CertPath,
 		BaseName: "ca",
 	}
 
 	controlPlaneEndpoint := fmt.Sprintf("https://%s:6443", d.APIServer)
-	err := cert.CreateJoinControlPlaneKubeConfigFiles(d.BasePath,
+
+	err := cert.CreateJoinControlPlaneKubeConfigFiles(d.Rootfs,
 		certConfig, hostname, controlPlaneEndpoint, "kubernetes")
 	if err != nil {
 		return fmt.Errorf("generator kubeconfig failed %s", err)
@@ -199,20 +174,24 @@ func (d *Default) CreateKubeConfig() error {
 //InitMaster0 is
 func (d *Default) InitMaster0() error {
 	d.SendJoinMasterKubeConfigs(d.Masters[:1], AdminConf, ControllerConf, SchedulerConf, KubeletConf)
+	/*
+		err := d.mountEtcdDisk(d.Masters[:1], d.EtcdDevice)
+		if err != nil {
+			return fmt.Error("mount for /var/lib/etcd failed at %s, due to %s", d.Masters[0], err)
+		}
+	*/
 
 	cmdAddEtcHost := fmt.Sprintf(RemoteAddEtcHosts, getAPIServerHost(utils.GetHostIP(d.Masters[0]), d.APIServer))
-	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(d.Rootfs, d.Masters[0]))
+	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(utils.GetHostIP(d.Masters[0])))
 	err := d.SSH.CmdAsync(d.Masters[0], cmdAddEtcHost, cmdAddRegistryHosts)
 	if err != nil {
 		return err
 	}
 
-	logger.Info("start to init master0...")
 	cmdInit := d.Command(d.Metadata.Version, InitMaster)
 
 	// TODO skip docker version error check for test
-	output, err := d.SSH.Cmd(d.Masters[0], cmdInit)
-	logger.Info("%s", output)
+	output, err := d.SSH.Cmd(d.Masters[0], fmt.Sprintf("%s --ignore-preflight-errors=SystemVerification", cmdInit))
 	if err != nil {
 		return fmt.Errorf("init master0 failed, error: %s. Please clean and reinstall", err.Error())
 	}
@@ -222,14 +201,65 @@ func (d *Default) InitMaster0() error {
 		return err
 	}
 
-	return nil
+	return d.InitCNI()
 }
 
-func (d *Default) CopyStaticFiles(nodes []string) error {
+func (d *Default) InitCNI() error {
+	logger.Info("start to install CNI")
+	if d.WithoutCNI {
+		return nil
+	}
+	// can-reach is used by calico multi network , flannel has nothing to add. just Use it.
+	if len(strings.Split(d.Interface, ".")) == 4 && d.Network == "calico" {
+		d.Interface = "can-reach=" + d.Interface
+	} else {
+		d.Interface = "interface=" + d.Interface
+	}
+
+	netYaml, err := guest.NewNetWork(d.Network, guest.MetaData{
+		Interface: d.Interface,
+		CIDR:      d.PodCIDR,
+		IPIP:      d.IPIP,
+		MTU:       d.MTU,
+	}).Manifests("")
+	if err != nil {
+		return fmt.Errorf("render net manifests failed %v", err)
+	}
+	logger.Info("render cni yaml success")
+
+	return d.SSH.CmdAsync(d.Masters[0], fmt.Sprintf(RemoteApplyYaml, netYaml))
+}
+
+/*func (d *Default) mountEtcdDisk(targetHosts []string, etcdDisk string) error {
+	if etcdDisk == "" {
+		logger.Warn("Etcd Disk is not set, etcd now uses root disk which is not recommended due to stability requirement.")
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for _, host := range targetHosts {
+		wg.Add(1)
+		go func(master string) {
+			defer wg.Done()
+			cmdInitDevice := fmt.Sprintf(RemoteCmdUnmountEtcd, etcdDisk)
+			cmdInitDir := fmt.Sprintf(RemoteCmdInitEtcdDir, etcdDisk, etcdDisk)
+			err := d.SSH.CmdAsync(master, cmdInitDevice, cmdInitDir)
+			if err != nil {
+				logger.Error("[%s] mount %s /var/lib/etcd failed, please check disk configuration", master, etcdDisk)
+				os.Exit(1)
+			}
+		}(host)
+	}
+	wg.Wait()
+
+	return nil
+}*/
+
+func (d *Default) LinkStaticFiles(nodes []string) error {
 	var flag bool
 	for _, file := range MasterStaticFiles {
 		staticFilePath := filepath.Join(d.StaticFileDir, file.Name)
-		cmdLinkStatic := fmt.Sprintf(RemoteCmdCopyStatic, file.DestinationDir, staticFilePath, filepath.Join(file.DestinationDir, file.Name))
+		cmdLinkStatic := fmt.Sprintf(RemoteCmdLinkStatic, file.DestinationDir, staticFilePath, filepath.Join(file.DestinationDir, file.Name))
 		var wg sync.WaitGroup
 		for _, host := range nodes {
 			wg.Add(1)

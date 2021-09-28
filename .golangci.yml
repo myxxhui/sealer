@@ -34,9 +34,6 @@ linters:
     - structcheck
     - unused
     - varcheck
-    - unparam
-    - ifshort
-    - unconvert
 
 issues:
   exclude-rules:

@@ -1,25 +1,11 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package guest
 
 import (
 	"fmt"
-
-	"github.com/alibaba/sealer/image/store"
+	"path/filepath"
 
 	"github.com/alibaba/sealer/common"
+	"github.com/alibaba/sealer/image/utils"
 	v1 "github.com/alibaba/sealer/types/api/v1"
 	ssh2 "github.com/alibaba/sealer/utils/ssh"
 )
@@ -29,22 +15,15 @@ type Interface interface {
 	Delete(cluster *v1.Cluster) error
 }
 
-type Default struct {
-	imageStore store.ImageStore
-}
+type Default struct{}
 
-func NewGuestManager() (Interface, error) {
-	is, err := store.NewDefaultImageStore()
-	if err != nil {
-		return nil, err
-	}
-
-	return &Default{imageStore: is}, nil
+func NewGuestManager() Interface {
+	return &Default{}
 }
 
 func (d *Default) Apply(cluster *v1.Cluster) error {
 	ssh := ssh2.NewSSHByCluster(cluster)
-	image, err := d.imageStore.GetByName(cluster.Spec.Image)
+	image, err := utils.GetImage(cluster.Spec.Image)
 	if err != nil {
 		return fmt.Errorf("get cluster image failed, %s", err)
 	}
@@ -52,7 +31,7 @@ func (d *Default) Apply(cluster *v1.Cluster) error {
 	if len(masters) == 0 {
 		return fmt.Errorf("failed to found master")
 	}
-	clusterRootfs := common.DefaultTheClusterRootfsDir(cluster.Name)
+	clusterRootfs := filepath.Join(common.DefaultClusterRootfsDir, cluster.Name)
 	for i := range image.Spec.Layers {
 		if image.Spec.Layers[i].Type != common.CMDCOMMAND {
 			continue

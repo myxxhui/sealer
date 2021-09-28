@@ -1,17 +1,3 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 // +build linux
 
 package mount
@@ -24,10 +10,6 @@ import (
 	"path"
 	"strings"
 	"syscall"
-
-	"github.com/alibaba/sealer/logger"
-
-	"github.com/alibaba/sealer/utils/ssh"
 
 	"github.com/alibaba/sealer/utils"
 )
@@ -84,8 +66,7 @@ func (o *Overlay2) Mount(target string, upperLayer string, layers ...string) err
 			_ = os.RemoveAll(workdir)
 		}
 	}()
-	mountData := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", strings.Join(utils.Reverse(layers), ":"), upperLayer, workdir)
-	logger.Debug("mount data : %s", mountData)
+	mountData := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", strings.Join(layers, ":"), upperLayer, workdir)
 	if err = mount("overlay", target, "overlay", 0, mountData); err != nil {
 		return fmt.Errorf("error creating overlay mount to %s: %v", target, err)
 	}
@@ -111,35 +92,4 @@ func mount(device, target, mType string, flag uintptr, data string) error {
 
 func unmount(target string, flag int) error {
 	return syscall.Unmount(target, flag)
-}
-
-func GetMountDetails(target string) (mounted bool, upper string) {
-	cmd := fmt.Sprintf("mount | grep %s", target)
-	result, err := utils.RunSimpleCmd(cmd)
-	if err != nil {
-		return false, ""
-	}
-	return mountCmdResultSplit(result, target)
-}
-
-func GetRemoteMountDetails(s ssh.Interface, ip string, target string) (mounted bool, upper string) {
-	result, err := s.Cmd(ip, fmt.Sprintf("mount | grep %s", target))
-	if err != nil {
-		return false, ""
-	}
-	return mountCmdResultSplit(string(result), target)
-}
-
-func mountCmdResultSplit(result string, target string) (mounted bool, upper string) {
-	if !strings.Contains(result, target) {
-		return false, ""
-	}
-
-	data := strings.Split(result, ",upperdir=")
-	if len(data) < 2 {
-		return false, ""
-	}
-
-	data = strings.Split(data[1], ",workdir=")
-	return true, strings.TrimSpace(data[0])
 }

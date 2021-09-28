@@ -1,44 +1,41 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package apply
 
 import (
 	"fmt"
 	"strconv"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/alibaba/sealer/client"
 	"github.com/alibaba/sealer/logger"
 	v1 "github.com/alibaba/sealer/types/api/v1"
 	"github.com/alibaba/sealer/utils"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const MasterRoleLabel = "node-role.kubernetes.io/master"
 
-func (c *DefaultApplier) GetCurrentCluster() (*v1.Cluster, error) {
-	return c.getCurrentNodes()
+func GetCurrentCluster() (*v1.Cluster, error) {
+	return getCurrentNodes()
 }
 
-func (c *DefaultApplier) getCurrentNodes() (*v1.Cluster, error) {
-	if c.client == nil {
-		return nil, nil
-	}
-	nodes, err := c.client.ListNodes()
+func listNodes() *corev1.NodeList {
+	c, err := client.NewClientSet()
 	if err != nil {
-		logger.Warn("%v, will create a new cluster", err)
+		logger.Info("current cluster not found, will create a new cluster %v", err)
+		return nil
+	}
+	nodes, err := client.ListNodes(c)
+	if err != nil {
+		logger.Info("current cluster nodes not found, will create a new cluster")
+		return nil
+	}
+	return nodes
+}
+
+func getCurrentNodes() (*v1.Cluster, error) {
+	nodes := listNodes()
+	if nodes == nil {
 		return nil, nil
 	}
 
@@ -73,18 +70,24 @@ func getNodeAddress(node *corev1.Node) string {
 	return node.Status.Addresses[0].Address
 }
 
-func (c *DefaultApplier) DeleteNodes(nodeIPs []string) error {
-	logger.Info("delete nodes %s", nodeIPs)
-	nodes, err := c.client.ListNodes()
+func deleteNode(name string) error {
+	c, err := client.NewClientSet()
 	if err != nil {
-		return err
+		logger.Info("current cluster not found, will create a new cluster %v", err)
+		return nil
 	}
+	return client.DeleteNode(c, name)
+}
+
+func DeleteNodes(nodeIPs []string) error {
+	logger.Info("delete nodes %s", nodeIPs)
+	nodes := listNodes()
 	for _, node := range nodes.Items {
 		addr := getNodeAddress(&node)
 		if addr == "" || utils.NotIn(addr, nodeIPs) {
 			continue
 		}
-		if err := c.client.DeleteNode(node.Name); err != nil {
+		if err := deleteNode(node.Name); err != nil {
 			return fmt.Errorf("failed to delete node %v", err)
 		}
 	}

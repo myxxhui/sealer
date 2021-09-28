@@ -1,17 +1,3 @@
-// Copyright © 2021 github.com/wonderivan/logger
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package logger
 
 import (
@@ -19,11 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/alibaba/sealer/common"
 )
 
 type connLogger struct {
@@ -83,7 +68,7 @@ func (c *connLogger) LogWrite(when time.Time, msgText interface{}, level logLeve
 
 	//网络异常时，消息发出
 	if !c.illNetFlag {
-		err = c.println(msg)
+		err = c.println(when, msg)
 		//网络异常，通知处理网络的go程自动重连
 		if err != nil {
 			c.illNetFlag = true
@@ -108,7 +93,7 @@ func (c *connLogger) connect() error {
 	for _, addr := range addrs {
 		conn, err := net.Dial(c.Net, addr)
 		if err != nil {
-			fmt.Fprintf(common.StdErr, "net.Dial error:%v\n", err)
+			fmt.Fprintf(os.Stderr, "net.Dial error:%v\n", err)
 			continue
 			//return err
 		}
@@ -116,7 +101,7 @@ func (c *connLogger) connect() error {
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
 			err = tcpConn.SetKeepAlive(true)
 			if err != nil {
-				fmt.Fprintf(common.StdErr, "failed to set tcp keep alive :%v\n", err)
+				fmt.Fprintf(os.Stderr, "failed to set tcp keep alive :%v\n", err)
 				continue
 			}
 		}
@@ -142,7 +127,7 @@ func (c *connLogger) needToConnectOnMsg() bool {
 	return c.ReconnectOnMsg
 }
 
-func (c *connLogger) println(msg *loginfo) error {
+func (c *connLogger) println(when time.Time, msg *loginfo) error {
 	c.Lock()
 	defer c.Unlock()
 	ss, err := json.Marshal(msg)

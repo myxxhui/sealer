@@ -1,17 +1,3 @@
-// Copyright © 2021 Alibaba Group Holding Ltd.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package runtime
 
 import (
@@ -38,12 +24,11 @@ const (
 	V1992 = "v1.19.2"
 	V1150 = "v1.15.0"
 	V1200 = "v1.20.0"
-	V1230 = "v1.23.0"
 )
 
 const (
 	RemoteAddEtcHosts       = "echo %s >> /etc/hosts"
-	RemoteUpdateEtcHosts    = `sed "s/%s/%s/g" < /etc/hosts > hosts && /usr/bin/cp -f hosts /etc/hosts`
+	RemoteUpdateEtcHosts    = `sed "s/%s/%s/g" -i /etc/hosts`
 	RemoteCopyKubeConfig    = `rm -rf .kube/config && mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config`
 	RemoteReplaceKubeConfig = `grep -qF "apiserver.cluster.local" %s  && sed -i 's/apiserver.cluster.local/%s/' %s && sed -i 's/apiserver.cluster.local/%s/' %s`
 	RemoteJoinMasterConfig  = `echo "%s" > %s/kubeadm-join-config.yaml`
@@ -59,8 +44,9 @@ rm -rf ~/.kube/ && rm -rf /etc/kubernetes/ && \
 rm -rf /etc/systemd/system/kubelet.service.d && rm -rf /etc/systemd/system/kubelet.service && \
 rm -rf /usr/bin/kube* && rm -rf /usr/bin/crictl && \
 rm -rf /etc/cni && rm -rf /opt/cni && \
-rm -rf /var/lib/etcd && rm -rf /var/etcd 
-`
+rm -rf /var/lib/etcd && rm -rf /var/etcd && \
+rm -rf ~/kube && \
+rm -rf /etc/kubernetes/pki `
 	RemoteRemoveAPIServerEtcHost = "sed -i \"/%s/d\" /etc/hosts"
 	RemoveLvscareStaticPod       = "rm -rf  /etc/kubernetes/manifests/kube-sealyun-lvscare*"
 	CreateLvscareStaticPod       = "mkdir -p /etc/kubernetes/manifests && echo '%s' > /etc/kubernetes/manifests/kube-sealyun-lvscare.yaml"
@@ -82,13 +68,6 @@ const (
 	// CriSocket
 	DefaultDockerCRISocket     = "/var/run/dockershim.sock"
 	DefaultContainerdCRISocket = "/run/containerd/containerd.sock"
-	DefaultSystemdCgroupDriver = "systemd"
-	DefaultCgroupDriver        = "cgroupfs"
-
-	// kubeadm api version
-	KubeadmV1beta1 = "kubeadm.k8s.io/v1beta1"
-	KubeadmV1beta2 = "kubeadm.k8s.io/v1beta2"
-	KubeadmV1beta3 = "kubeadm.k8s.io/v1beta3"
 )
 
 const (
@@ -105,8 +84,6 @@ const (
 	CertSANS             = "CertSANS"
 	EtcdServers          = "EtcdServers"
 	CriSocket            = "CriSocket"
-	CriCGroupDriver      = "CriCGroupDriver"
-	KubeadmAPI           = "KubeadmAPI"
 	TokenDiscoveryCAHash = "TokenDiscoveryCAHash"
 	SeaHub               = "sea.hub"
 )
@@ -123,7 +100,7 @@ func getAPIServerHost(ipAddr, APIServer string) (host string) {
 }
 
 func (d *Default) JoinMasterCommands(master, joinCmd, hostname string) []string {
-	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(d.Rootfs, d.Masters[0]))
+	cmdAddRegistryHosts := fmt.Sprintf(RemoteAddEtcHosts, getRegistryHost(utils.GetHostIP(d.Masters[0])))
 	hostIP := utils.GetHostIP(master)
 	certCMD := command.RemoteCerts(d.APIServerCertSANs, hostIP, hostname, d.SvcCIDR, "")
 	cmdAddHosts := fmt.Sprintf(RemoteAddEtcHosts, getAPIServerHost(utils.GetHostIP(d.Masters[0]), d.APIServer))
@@ -135,7 +112,7 @@ func (d *Default) JoinMasterCommands(master, joinCmd, hostname string) []string 
 
 func (d *Default) sendKubeConfigFile(hosts []string, kubeFile string) {
 	absKubeFile := fmt.Sprintf("%s/%s", cert.KubernetesDir, kubeFile)
-	sealerKubeFile := fmt.Sprintf("%s/%s", d.BasePath, kubeFile)
+	sealerKubeFile := fmt.Sprintf("%s/%s", d.Rootfs, kubeFile)
 	d.sendFileToHosts(hosts, sealerKubeFile, absKubeFile)
 }
 
@@ -186,12 +163,11 @@ func (d *Default) SendJoinMasterKubeConfigs(masters []string, files ...string) {
 
 func joinKubeadmConfig() string {
 	var sb strings.Builder
-	sb.Write([]byte(JoinCPTemplateText))
+	sb.Write([]byte(JoinCPTemplateTextV1beta2))
 	return sb.String()
 }
 
 func (d *Default) JoinTemplateFromTemplateContent(templateContent, ip string) []byte {
-	d.setKubeadmAPIByVersion()
 	tmpl, err := template.New("text").Parse(templateContent)
 	if err != nil {
 		logger.Error("template join config failed %v", err)
@@ -203,11 +179,11 @@ func (d *Default) JoinTemplateFromTemplateContent(templateContent, ip string) []
 	envMap[TokenDiscovery] = d.JoinToken
 	envMap[TokenDiscoveryCAHash] = d.TokenCaCertHash
 	envMap[VIP] = d.VIP
-	envMap[KubeadmAPI] = d.KubeadmAPI
-	envMap[CriSocket] = d.CriSocket
-	// we need to Dynamic get cgroup driver on ervery join nodes.
-	envMap[CriCGroupDriver] = d.CriCGroupDriver
-
+	if VersionCompare(d.Metadata.Version, V1200) {
+		envMap[CriSocket] = DefaultContainerdCRISocket
+	} else {
+		envMap[CriSocket] = DefaultDockerCRISocket
+	}
 	var buffer bytes.Buffer
 	err = tmpl.Execute(&buffer, envMap)
 	if err != nil {
@@ -221,25 +197,6 @@ func (d *Default) JoinTemplate(ip string) []byte {
 	return d.JoinTemplateFromTemplateContent(joinKubeadmConfig(), ip)
 }
 
-// getCgroupDriverFromShell is get nodes container runtime cgroup by shell.
-func (d *Default) getCgroupDriverFromShell(node string) string {
-	var cmd string
-	if VersionCompare(d.Metadata.Version, V1200) {
-		cmd = ContainerdShell
-	} else {
-		cmd = DockerShell
-	}
-	driver, err := d.SSH.CmdToString(node, cmd, " ")
-	if err != nil {
-		// by default if we get wrong output we set it default systemd?
-		driver = DefaultSystemdCgroupDriver
-		logger.Error("get nodes [%s] cgroup driver err: %v", node, err)
-	}
-	driver = strings.TrimSpace(driver)
-	logger.Debug("get nodes [%s] cgroup driver is [%s]", node, driver)
-	return driver
-}
-
 // sendJoinCPConfig send join CP nodes configuration
 func (d *Default) sendJoinCPConfig(joinMaster []string) {
 	var wg sync.WaitGroup
@@ -247,8 +204,6 @@ func (d *Default) sendJoinCPConfig(joinMaster []string) {
 		wg.Add(1)
 		go func(master string) {
 			defer wg.Done()
-			// set d.CriCGroupDriver on every nodes.
-			d.CriCGroupDriver = d.getCgroupDriverFromShell(master)
 			templateData := string(d.JoinTemplate(utils.GetHostIP(master)))
 			cmd := fmt.Sprintf(RemoteJoinMasterConfig, templateData, d.Rootfs)
 			err := d.SSH.CmdAsync(master, cmd)
@@ -302,14 +257,6 @@ func (d *Default) Command(version string, name CommandType) (cmd string) {
 		logger.Error("get kubeadm command failed %v", cmds)
 		return ""
 	}
-
-	if utils.IsInContainer() {
-		return fmt.Sprintf("%s%s%s", v, vlogToStr(d.Vlog), " --ignore-preflight-errors=all")
-	}
-	if name == InitMaster || name == JoinMaster {
-		return fmt.Sprintf("%s%s%s", v, vlogToStr(d.Vlog), " --ignore-preflight-errors=SystemVerification")
-	}
-
 	return fmt.Sprintf("%s%s", v, vlogToStr(d.Vlog))
 }
 
@@ -336,16 +283,13 @@ func (d *Default) joinMasters(masters []string) error {
 	if len(masters) == 0 {
 		return nil
 	}
-	if err := d.LoadMetadata(); err != nil {
-		return fmt.Errorf("failed to load metadata %v", err)
-	}
-	if err := ssh.WaitSSHReady(d.SSH, 6, masters...); err != nil {
+	if err := ssh.WaitSSHReady(d.SSH, masters...); err != nil {
 		return errors.Wrap(err, "join masters wait for ssh ready time out")
 	}
 	if err := d.GetJoinTokenHashAndKey(); err != nil {
 		return err
 	}
-	if err := d.CopyStaticFiles(masters); err != nil {
+	if err := d.LinkStaticFiles(masters); err != nil {
 		return err
 	}
 	d.SendJoinMasterKubeConfigs(masters, AdminConf, ControllerConf, SchedulerConf)
@@ -354,6 +298,7 @@ func (d *Default) joinMasters(masters []string) error {
 	d.sendJoinCPConfig(masters)
 	cmd := d.Command(d.Metadata.Version, JoinMaster)
 	// TODO for test skip dockerd dev version
+	cmd = fmt.Sprintf("%s --ignore-preflight-errors=SystemVerification", cmd)
 	if cmd == "" {
 		return fmt.Errorf("get join master command failed, kubernetes version is %s", d.Metadata.Version)
 	}
@@ -449,7 +394,8 @@ func (d *Default) isHostName(master, host string) string {
 }
 
 func (d *Default) deleteMaster(master string) error {
-	if err := d.SSH.CmdAsync(master, fmt.Sprintf(RemoteCleanMasterOrNode, vlogToStr(d.Vlog)), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, d.APIServer), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, getRegistryHost(d.Rootfs, d.Masters[0]))); err != nil {
+	host := utils.GetHostIP(master)
+	if err := d.SSH.CmdAsync(host, fmt.Sprintf(RemoteCleanMasterOrNode, vlogToStr(d.Vlog)), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, d.APIServer), fmt.Sprintf(RemoteRemoveAPIServerEtcHost, getRegistryHost(d.Masters[0]))); err != nil {
 		return err
 	}
 
